@@ -223,15 +223,21 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 # ==========================================
-# INITIALISATION ET LANCEMENT MULTI-TÂCHES
+# INITIALISATION ET LANCEMENT PROPRE
 # ==========================================
+
+async def au_demarrage(application: Application) -> None:
+    """Cette fonction s'exécute automatiquement AU SEIN de la boucle 
+    d'événements active de Telegram juste avant de lancer le bot."""
+    await start_web_server()
 
 def main():
     if not TOKEN:
         print("Erreur : Le TOKEN Telegram n'est pas configuré.")
         return
 
-    application = Application.builder().token(TOKEN).build()
+    # On configure l'application en lui passant la tâche de démarrage du serveur web
+    application = Application.builder().token(TOKEN).post_init(au_demarrage).build()
     
     video_conversation = ConversationHandler(
         entry_points=[MessageHandler(filters.VIDEO, video_receive_handler)],
@@ -239,7 +245,8 @@ def main():
             CHOIX_FORMAT: [CallbackQueryHandler(format_selection_callback, pattern="^format_")],
             ATTENTE_NOM: [MessageHandler(filters.TEXT & ~filters.COMMAND, rename_and_process_handler)]
         },
-        fallbacks=[CommandHandler("cancel", cancel)]
+        fallbacks=[CommandHandler("cancel", cancel)],
+        per_message=True  # Optionnel: Évite le warning PTBUserWarning affiché dans vos logs
     )
     
     application.add_handler(video_conversation)
@@ -247,13 +254,7 @@ def main():
     application.add_handler(CommandHandler("delthumb", delete_thumbnail_command))
     application.add_handler(MessageHandler(filters.PHOTO, save_thumbnail))
     
-    # ─── CONFIGURATION CRITIQUE POUR RENDER ───
-    # 1. On récupère la boucle d'événements asynchrone en cours
-    loop = asyncio.get_event_loop()
-    # 2. On injecte le démarrage du mini-serveur HTTP dans la boucle
-    loop.create_task(start_web_server())
-    
-    print("Le bot et son serveur Keep-Alive sont en route...")
+    print("Le bot et son serveur Keep-Alive s'initialisent...")
     application.run_polling()
 
 if __name__ == "__main__":
