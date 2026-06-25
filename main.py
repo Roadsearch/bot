@@ -222,22 +222,18 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Action annulée.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
-# ==========================================
-# INITIALISATION ET LANCEMENT PROPRE
-# ==========================================
+# Modifiez toute la fin de votre fichier à partir de la fonction main() :
 
-async def au_demarrage(application: Application) -> None:
-    """Cette fonction s'exécute automatiquement AU SEIN de la boucle 
-    d'événements active de Telegram juste avant de lancer le bot."""
-    await start_web_server()
+# On supprime la fonction "au_demarrage" précédente qui devenait inutile
 
-def main():
+async def main_async():
+    """Démarre proprement le serveur Keep-Alive et le Bot au sein du même thread asynchrone"""
     if not TOKEN:
         print("Erreur : Le TOKEN Telegram n'est pas configuré.")
         return
 
-    # On configure l'application en lui passant la tâche de démarrage du serveur web
-    application = Application.builder().token(TOKEN).post_init(au_demarrage).build()
+    # 1. On initialise le Bot Telegram
+    application = Application.builder().token(TOKEN).build()
     
     video_conversation = ConversationHandler(
         entry_points=[MessageHandler(filters.VIDEO, video_receive_handler)],
@@ -246,7 +242,7 @@ def main():
             ATTENTE_NOM: [MessageHandler(filters.TEXT & ~filters.COMMAND, rename_and_process_handler)]
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=True  # Optionnel: Évite le warning PTBUserWarning affiché dans vos logs
+        per_message=False  # Remis à False pour corriger le PTBUserWarning affiché dans vos logs
     )
     
     application.add_handler(video_conversation)
@@ -254,8 +250,23 @@ def main():
     application.add_handler(CommandHandler("delthumb", delete_thumbnail_command))
     application.add_handler(MessageHandler(filters.PHOTO, save_thumbnail))
     
-    print("Le bot et son serveur Keep-Alive s'initialisent...")
-    application.run_polling()
+    # 2. On démarre notre mini-serveur Web Keep-Alive (UptimeRobot)
+    await start_web_server()
+    
+    # 3. On initialise et on lance l'écoute des messages Telegram proprement
+    print("Le bot et son serveur Keep-Alive sont en route sur le même thread...")
+    async with application:
+        await application.initialize()
+        await application.start()
+        await application.updater.start_polling()
+        
+        # Maintient le script en vie indéfiniment
+        while True:
+            await asyncio.sleep(3600)
+
+def main():
+    """Point d'entrée principal qui force la création de l'Event Loop globale"""
+    asyncio.run(main_async())
 
 if __name__ == "__main__":
     main()
