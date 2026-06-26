@@ -23,26 +23,6 @@ BUCKET_THUMBS = "miniatures"
 CHOIX_FORMAT, ATTENTE_NOM = range(2)
 
 # ==========================================
-# ACCEUIL
-# ==========================================
-
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Message d'accueil lorsque l'utilisateur tape /start"""
-    user_name = update.effective_user.first_name
-    texte_accueil = (
-        f"👋 Bonjour {user_name} !\n\n"
-        "📥 **Comment utiliser ce bot :**\n"
-        "1. Envoyez-moi une **vidéo** directement dans le chat.\n"
-        "2. Choisissez si vous voulez la recevoir en format Vidéo ou Document.\n"
-        "3. Donnez-lui un nouveau nom... et voilà ! ✨\n\n"
-        "🖼️ **Gestion des miniatures :**\n"
-        "• Envoyez-moi une simple **photo** pour l'enregistrer comme miniature par défaut.\n"
-        "• Tapez /viewthumb pour voir votre miniature actuelle.\n"
-        "• Tapez /delthumb pour supprimer votre miniature."
-    )
-    await update.message.reply_text(texte_accueil)
-    
-# ==========================================
 # MINI SERVEUR WEB POUR RENDER (KEEP-ALIVE)
 # ==========================================
 
@@ -60,6 +40,26 @@ async def start_web_server():
     site = web.TCPSite(runner, "0.0.0.0", port)
     print(f"🌍 Serveur de Keep-Alive démarré sur le port {port}")
     await site.start()
+
+# ==========================================
+# COMMANDE START (ACCUEIL)
+# ==========================================
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Message d'accueil lorsque l'utilisateur tape /start"""
+    user_name = update.effective_user.first_name
+    texte_accueil = (
+        f"👋 Bonjour {user_name} !\n\n"
+        "📥 Comment utiliser ce bot :\n"
+        "1. Envoyez-moi une vidéo directement dans le chat.\n"
+        "2. Choisissez si vous voulez la recevoir en format Vidéo ou Document.\n"
+        "3. Donnez-lui un nouveau nom... et voilà ! ✨\n\n"
+        "🖼️ Gestion des miniatures :\n"
+        "• Envoyez-moi une simple photo pour l'enregistrer comme miniature par défaut.\n"
+        "• Tapez /viewthumb pour voir votre miniature actuelle.\n"
+        "• Tapez /delthumb pour supprimer votre miniature."
+    )
+    await update.message.reply_text(texte_accueil)
 
 # ==========================================
 # RÉCEPTION VIDÉO & CHOIX FORMAT
@@ -87,10 +87,10 @@ async def format_selection_callback(update: Update, context: ContextTypes.DEFAUL
     
     if query.data == "format_doc":
         context.user_data["chosen_format"] = "document"
-        await query.edit_message_text("📄 Option choisie : Document.\n\n✍️ **Veuillez m'envoyer le nouveau nom pour votre fichier (sans extension) :**")
+        await query.edit_message_text("📄 Option choisie : Document.\n\n✍️ Veuillez m'envoyer le nouveau nom pour votre fichier (sans extension) :")
     elif query.data == "format_vid":
         context.user_data["chosen_format"] = "video"
-        await query.edit_message_text("🎬 Option choisie : Vidéo.\n\n✍️ **Veuillez m'envoyer le nouveau nom pour votre fichier (sans extension) :**")
+        await query.edit_message_text("🎬 Option choisie : Vidéo.\n\n✍️ Veuillez m'envoyer le nouveau nom pour votre fichier (sans extension) :")
     return ATTENTE_NOM
 
 # ==========================================
@@ -109,35 +109,53 @@ async def rename_and_process_handler(update: Update, context: ContextTypes.DEFAU
     video_file_id = context.user_data.get("video_file_id")
     chosen_format = context.user_data.get("chosen_format", "document")
 
-    status_message = await update.message.reply_text("⚙️ Traitement instantané en cours...")
+    status_message = await update.message.reply_text("⚙️ Application de la miniature et du format...")
+
+    local_thumb = f"thumb_{user_id}.jpg"
+    has_thumb = False
+    
+    # Téléchargement local de la miniature uniquement (très léger en RAM)
+    supabase_thumb_path = f"{user_id}/thumbnail.jpg"
+    try:
+        thumb_data = supabase.storage.from_(BUCKET_THUMBS).download(supabase_thumb_path)
+        with open(local_thumb, "wb") as f:
+            f.write(thumb_data)
+        has_thumb = True
+    except Exception:
+        has_thumb = False
 
     try:
-        # Lien direct vers la miniature publique sur Supabase
-        supabase_thumb_url = f"{SUPABASE_URL}/storage/v1/object/public/{BUCKET_THUMBS}/{user_id}/thumbnail.jpg"
-        caption_text = f"✅ `{custom_name}.mp4` prêt !"
-
-        # Envoi via la méthode Passerelle (zéro consommation RAM locale)
+        t_obj = open(local_thumb, "rb") if has_thumb else None
+        
+        # Envoi selon le format choisi avec gestion de la miniature locale
         if chosen_format == "video":
             await context.bot.send_video(
                 chat_id=user_id,
                 video=video_file_id,
-                thumbnail=supabase_thumb_url,
-                caption=caption_text,
+                thumbnail=t_obj,
+                caption=f"🎬 {custom_name}.mp4 prêt !",
                 filename=f"{custom_name}.mp4"
             )
         else:
             await context.bot.send_document(
                 chat_id=user_id,
                 document=video_file_id,
-                thumbnail=supabase_thumb_url,
-                caption=caption_text,
+                thumbnail=t_obj,
+                caption=f"📄 {custom_name}.mp4 prêt !",
                 filename=f"{custom_name}.mp4"
             )
+
+        if t_obj:
+            t_obj.close()
 
         await status_message.delete()
 
     except Exception as e:
         await context.bot.send_message(chat_id=user_id, text=f"⚠️ Erreur durant le traitement : {str(e)}")
+    finally:
+        # Nettoyage du fichier temporaire de miniature
+        if os.path.exists(local_thumb):
+            os.remove(local_thumb)
     
     context.user_data.clear()
     return ConversationHandler.END
@@ -163,7 +181,7 @@ async def save_thumbnail(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await status_msg.delete()
         with open(local_thumb, "rb") as p_obj:
-            await update.message.reply_photo(photo=p_obj, caption="✅ **Miniature enregistrée avec succès !**")
+            await update.message.reply_photo(photo=p_obj, caption="✅ Miniature enregistrée avec succès !")
     except Exception as e:
         await status_msg.edit_text(f"❌ Erreur : {str(e)}")
     finally:
@@ -217,11 +235,11 @@ async def main_async():
             ATTENTE_NOM: [MessageHandler(filters.TEXT & ~filters.COMMAND, rename_and_process_handler)]
         },
         fallbacks=[CommandHandler("cancel", cancel)],
-        per_message=False  # Évite les avertissements inutiles PTBUserWarning
+        per_message=False
     )
     
     application.add_handler(video_conversation)
-    application.add_handler(CommandHandler("start", start_command)) # <-- LIGNE À AJOUTER
+    application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("viewthumb", view_thumbnail_command))
     application.add_handler(CommandHandler("delthumb", delete_thumbnail_command))
     application.add_handler(MessageHandler(filters.PHOTO, save_thumbnail))
